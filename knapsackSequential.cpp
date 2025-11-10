@@ -45,7 +45,6 @@ public:
         return dp[capacity];
     }
 
-    // 1D DP SIMD (AVX2, bez gather-a) — dva bafera, naprijed po w
     
     // SIMD (AVX2) – koristi dvostruki bafer (prev -> dp), gather + maska (radi poređenja)
     int knapsackSIMD() {
@@ -105,7 +104,10 @@ public:
         }
         return dp[capacity];
     }
-    
+
+    // 1D DP SIMD (AVX2, bez gather-a) — dva bafera, naprijed po w
+
+
     int knapsackOptimizedSIMD() {
         std::vector<int> dp(capacity + 8, 0), prev(capacity + 8, 0);
     
