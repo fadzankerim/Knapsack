@@ -1,0 +1,48 @@
+# --- IGNORE SVE OSIM .cpp i .py FAJLOVA ---
+
+# Ignoriši sve
+*
+
+# Ali DOZVOLI (whitelist) .cpp i .py fajlove
+!*.cpp
+!*.py
+
+# DOZVOLI gitignore da ne bude ignorisan
+!.gitignore
+
+# --- IGNORED FILES / FOLDERS ---
+
+# Python virtual environment
+venv/
+.venv/
+
+# Vizualizacijski folderi
+viz_*/
+
+# Slike i grafovi
+*.png
+*.jpg
+*.jpeg
+*.svg
+
+# CSV rezultati
+*.csv
+
+# Executables / binaries
+*.exe
+*.out
+*.o
+*.obj
+
+# CMake / build directories (ako koristiš)
+build/
+cmake-build*/
+
+# Temp fajlovi
+*.tmp
+*.log
+
+# VSCode / sistemski fajlovi
+.vscode/
+.DS_Store
+Thumbs.db

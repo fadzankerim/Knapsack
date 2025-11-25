@@ -6,14 +6,15 @@
 #include <cstdlib>
 #include <ctime>
 #include <chrono>
-#include <cstring>      // memcpy, memset
-#include <immintrin.h>  // AVX2 intrinsics
-#include <omp.h>        // OpenMP
-#include <fstream>      // ofstream za CSV
+#include <cstring>     // memcpy, memset
+#include <immintrin.h> // AVX2 intrinsics
+#include <omp.h>       // OpenMP
+#include <fstream>     // ofstream za CSV
 
 //  ContainerLoader klasa
 
-class ContainerLoader {
+class ContainerLoader
+{
 private:
     std::vector<int> weights; // tezine
     std::vector<int> values;  // vrijednosti
@@ -21,26 +22,32 @@ private:
     int n;                    // br predmeta
 
 public:
-    ContainerLoader(const std::vector<int>& w,
-                    const std::vector<int>& v,
+    ContainerLoader(const std::vector<int> &w,
+                    const std::vector<int> &v,
                     int cap)
         : weights(w), values(v), capacity(cap), n((int)w.size()) {}
 
     // 1) Klasični 2D DP (referentna, najsporija varijanta)
-    int knapsackClassic2D() const {
+    int knapsackClassic2D() const
+    {
         // dp[i][w] = max vrijednost koristeći prvih i predmeta
         std::vector<std::vector<int>> dp(n + 1, std::vector<int>(capacity + 1, 0));
 
-        for (int i = 1; i <= n; ++i) {
+        for (int i = 1; i <= n; ++i)
+        {
             int wi = weights[i - 1];
             int vi = values[i - 1];
 
-            for (int w = 0; w <= capacity; ++w) {
-                if (wi <= w) {
+            for (int w = 0; w <= capacity; ++w)
+            {
+                if (wi <= w)
+                {
                     int take = dp[i - 1][w - wi] + vi;
                     int skip = dp[i - 1][w];
                     dp[i][w] = std::max(skip, take);
-                } else {
+                }
+                else
+                {
                     dp[i][w] = dp[i - 1][w];
                 }
             }
@@ -49,17 +56,21 @@ public:
     }
 
     // 2) Originalni 1D DP (sekvencijalno, ali bez SIMD-a) – dobra baza za poređenje
-    int knapsack1D_baseline() const {
+    int knapsack1D_baseline() const
+    {
         std::vector<int> dp(capacity + 1, 0);
 
-        for (int i = 0; i < n; ++i) {
+        for (int i = 0; i < n; ++i)
+        {
             int wi = weights[i];
             int vi = values[i];
 
             // UNAZAD po w da ne pregazimo dp[w - wi]
-            for (int w = capacity; w >= wi; --w) {
+            for (int w = capacity; w >= wi; --w)
+            {
                 int cand = dp[w - wi] + vi;
-                if (cand > dp[w]) {
+                if (cand > dp[w])
+                {
                     dp[w] = cand;
                 }
             }
@@ -68,17 +79,21 @@ public:
     }
 
     // 3) Brža 1D verzija (pointer na std::vector) – scalar
-    int knapsack1D_fast() const {
+    int knapsack1D_fast() const
+    {
         std::vector<int> vdp(capacity + 1, 0);
-        int* __restrict dp = vdp.data();
+        int *__restrict dp = vdp.data();
 
-        for (int i = 0; i < n; ++i) {
+        for (int i = 0; i < n; ++i)
+        {
             int wi = weights[i];
             int vi = values[i];
 
-            for (int w = capacity; w >= wi; --w) {
+            for (int w = capacity; w >= wi; --w)
+            {
                 int cand = dp[w - wi] + vi;
-                if (cand > dp[w]) {
+                if (cand > dp[w])
+                {
                     dp[w] = cand;
                 }
             }
@@ -89,28 +104,31 @@ public:
     // 4) SIMD 1D DP (AVX2, streaming, single-thread)
     //    – dvostruki bafer (prev, dp), naprijed po w
     //    – koristi C-nizove (new[]), kontigventna čitanja
-    int knapsackSIMD_stream() const {
+    int knapsackSIMD_stream() const
+    {
         const int N = capacity + 8; // mali padding
 
         // C-nizovi umjesto std::vector
-        int* prev = new int[N];
-        int* dp   = new int[N];
+        int *prev = new int[N];
+        int *dp = new int[N];
 
         // inicijalno sve 0
         std::memset(prev, 0, sizeof(int) * N);
-        std::memset(dp,   0, sizeof(int) * N);
+        std::memset(dp, 0, sizeof(int) * N);
 
-        for (int i = 0; i < n; ++i) {
+        for (int i = 0; i < n; ++i)
+        {
             const int wi = weights[i];
             const int vi = values[i];
 
             // jeftin swap pointera umjesto std::swap()
-            int* tmp = prev;
+            int *tmp = prev;
             prev = dp;
-            dp   = tmp;
+            dp = tmp;
 
             // ispod wi: predmet ne može stati -> kopiraj staro stanje (linearni memcpy)
-            if (wi > 0) {
+            if (wi > 0)
+            {
                 const int count = std::min(wi, capacity + 1);
                 std::memcpy(dp, prev, sizeof(int) * count);
             }
@@ -120,21 +138,23 @@ public:
             int w = wi;
             const int Wlim = capacity - 7; // posljednji blok koji staje u [w..w+7]
 
-            for (; w <= Wlim; w += 8) {
+            for (; w <= Wlim; w += 8)
+            {
                 // oba loada su kontigventna => cache-friendly
-                __m256i prev_curr  =
-                    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&prev[w]));
+                __m256i prev_curr =
+                    _mm256_loadu_si256(reinterpret_cast<const __m256i *>(&prev[w]));
                 __m256i prev_shift =
-                    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&prev[w - wi]));
+                    _mm256_loadu_si256(reinterpret_cast<const __m256i *>(&prev[w - wi]));
 
                 __m256i cand = _mm256_add_epi32(prev_shift, add_vi);
-                __m256i res  = _mm256_max_epi32(prev_curr, cand);
+                __m256i res = _mm256_max_epi32(prev_curr, cand);
 
-                _mm256_storeu_si256(reinterpret_cast<__m256i*>(&dp[w]), res);
+                _mm256_storeu_si256(reinterpret_cast<__m256i *>(&dp[w]), res);
             }
 
             // "rep" (tail) skalarno do kraja capacity-ja
-            for (; w <= capacity; ++w) {
+            for (; w <= capacity; ++w)
+            {
                 int take = prev[w - wi] + vi;
                 int skip = prev[w];
                 dp[w] = (take > skip) ? take : skip;
@@ -154,59 +174,64 @@ public:
     //  - ista DP logika kao knapsackSIMD_stream()
     //  - za fiksni i: prev je read-only, dp se puni po disjunktnim blokovima [w..w+7]
     //  - for po w je paralelizovan sa OpenMP-om
-    int knapsackSIMD_stream_omp() const {
+    int knapsackSIMD_stream_omp() const
+    {
         const int N = capacity + 8;
 
-        int* prev = new int[N];
-        int* dp   = new int[N];
+        int *prev = new int[N];
+        int *dp = new int[N];
 
         std::memset(prev, 0, sizeof(int) * N);
-        std::memset(dp,   0, sizeof(int) * N);
+        std::memset(dp, 0, sizeof(int) * N);
 
-        for (int i = 0; i < n; ++i) {
+        for (int i = 0; i < n; ++i)
+        {
             const int wi = weights[i];
             const int vi = values[i];
 
             // swap pointera (O(1))
-            int* tmp = prev;
+            int *tmp = prev;
             prev = dp;
-            dp   = tmp;
+            dp = tmp;
 
             // prefiks: w < wi -> predmet ne može stati, kopiramo staro stanje
-            if (wi > 0) {
+            if (wi > 0)
+            {
                 const int count = std::min(wi, capacity + 1);
                 std::memcpy(dp, prev, sizeof(int) * count);
             }
 
             __m256i add_vi = _mm256_set1_epi32(vi);
 
-            const int Wlim    = capacity - 7;
+            const int Wlim = capacity - 7;
             const int w_start = wi;
 
-            // Paralelizovana AVX2 petlja
-            #pragma omp parallel
+// Paralelizovana AVX2 petlja
+#pragma omp parallel
             {
-                int* __restrict loc_prev = prev;
-                int* __restrict loc_dp   = dp;
-                __m256i loc_add_vi       = add_vi;
+                int *__restrict loc_prev = prev;
+                int *__restrict loc_dp = dp;
+                __m256i loc_add_vi = add_vi;
 
-                #pragma omp for schedule(static)
-                for (int w = w_start; w <= Wlim; w += 8) {
-                    __m256i prev_curr  =
-                        _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&loc_prev[w]));
+#pragma omp for schedule(static)
+                for (int w = w_start; w <= Wlim; w += 8)
+                {
+                    __m256i prev_curr =
+                        _mm256_loadu_si256(reinterpret_cast<const __m256i *>(&loc_prev[w]));
                     __m256i prev_shift =
-                        _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&loc_prev[w - wi]));
+                        _mm256_loadu_si256(reinterpret_cast<const __m256i *>(&loc_prev[w - wi]));
 
                     __m256i cand = _mm256_add_epi32(prev_shift, loc_add_vi);
-                    __m256i res  = _mm256_max_epi32(prev_curr, cand);
+                    __m256i res = _mm256_max_epi32(prev_curr, cand);
 
-                    _mm256_storeu_si256(reinterpret_cast<__m256i*>(&loc_dp[w]), res);
+                    _mm256_storeu_si256(reinterpret_cast<__m256i *>(&loc_dp[w]), res);
                 }
             }
 
             // rep (tail) skalarno – OpenMP overhead se ne isplati za malo elemenata
             int w_tail = std::max(w_start, Wlim + 1);
-            for (int w = w_tail; w <= capacity; ++w) {
+            for (int w = w_tail; w <= capacity; ++w)
+            {
                 int take = prev[w - wi] + vi;
                 int skip = prev[w];
                 dp[w] = (take > skip) ? take : skip;
@@ -222,30 +247,31 @@ public:
     }
 };
 
-
 //  Generisanje test podataka
 
 void generateTestData(int n,
-                      std::vector<int>& weights,
-                      std::vector<int>& values,
-                      int& capacity) {
+                      std::vector<int> &weights,
+                      std::vector<int> &values,
+                      int &capacity)
+{
     weights.resize(n);
     values.resize(n);
 
     std::srand(static_cast<unsigned>(std::time(nullptr)));
 
-    for (int i = 0; i < n; ++i) {
-        weights[i] = std::rand() % 100 + 1;   // 1..100
-        values[i]  = std::rand() % 500 + 50;  // 50..549
+    for (int i = 0; i < n; ++i)
+    {
+        weights[i] = std::rand() % 100 + 1; // 1..100
+        values[i] = std::rand() % 500 + 50; // 50..549
     }
     capacity = n * 50; // dosta velik kapacitet za stres-test
 }
 
-
 //  Helper za mjerenje vremena
 
 template <typename Func>
-double measure_seconds(Func f, int& result_out) {
+double measure_seconds(Func f, int &result_out)
+{
     auto t1 = std::chrono::high_resolution_clock::now();
     result_out = f();
     auto t2 = std::chrono::high_resolution_clock::now();
@@ -253,8 +279,8 @@ double measure_seconds(Func f, int& result_out) {
     return diff.count();
 }
 
-
-int main() {
+int main()
+{
     const int num_items = 1000;
 
     std::vector<int> weights, values;
@@ -273,56 +299,90 @@ int main() {
     double t_classic2D, t_1d_base, t_1d_fast;
     double t_simd_stream, t_simd_stream_omp;
 
-    t_classic2D       = measure_seconds([&](){ return loader.knapsackClassic2D(); },        r_classic2D);
-    t_1d_base         = measure_seconds([&](){ return loader.knapsack1D_baseline(); },      r_1d_base);
-    t_1d_fast         = measure_seconds([&](){ return loader.knapsack1D_fast(); },          r_1d_fast);
-    t_simd_stream     = measure_seconds([&](){ return loader.knapsackSIMD_stream(); },      r_simd_stream);
-    t_simd_stream_omp = measure_seconds([&](){ return loader.knapsackSIMD_stream_omp(); },  r_simd_stream_omp);
+    t_classic2D = measure_seconds([&]()
+                                  { return loader.knapsackClassic2D(); }, r_classic2D);
+    t_1d_base = measure_seconds([&]()
+                                { return loader.knapsack1D_baseline(); }, r_1d_base);
+    t_1d_fast = measure_seconds([&]()
+                                { return loader.knapsack1D_fast(); }, r_1d_fast);
+    t_simd_stream = measure_seconds([&]()
+                                    { return loader.knapsackSIMD_stream(); }, r_simd_stream);
+    t_simd_stream_omp = measure_seconds([&]()
+                                        { return loader.knapsackSIMD_stream_omp(); }, r_simd_stream_omp);
 
     std::cout << "Rezultati:\n";
-    std::cout << "Classic 2D:            " << r_classic2D       << "  (t = " << t_classic2D       << " s)\n";
-    std::cout << "1D baseline:           " << r_1d_base         << "  (t = " << t_1d_base         << " s)\n";
-    std::cout << "1D fast:               " << r_1d_fast         << "  (t = " << t_1d_fast         << " s)\n";
-    std::cout << "SIMD stream:           " << r_simd_stream     << "  (t = " << t_simd_stream     << " s)\n";
+    std::cout << "Classic 2D:            " << r_classic2D << "  (t = " << t_classic2D << " s)\n";
+    std::cout << "1D baseline:           " << r_1d_base << "  (t = " << t_1d_base << " s)\n";
+    std::cout << "1D fast:               " << r_1d_fast << "  (t = " << t_1d_fast << " s)\n";
+    std::cout << "SIMD stream:           " << r_simd_stream << "  (t = " << t_simd_stream << " s)\n";
     std::cout << "SIMD stream + OpenMP:  " << r_simd_stream_omp << "  (t = " << t_simd_stream_omp << " s)\n";
 
     // Provjera konzistentnosti – svi moraju dati isti optimum
     bool ok = (r_classic2D == r_1d_base) &&
-              (r_1d_base   == r_1d_fast) &&
-              (r_1d_fast   == r_simd_stream) &&
+              (r_1d_base == r_1d_fast) &&
+              (r_1d_fast == r_simd_stream) &&
               (r_simd_stream == r_simd_stream_omp);
 
-    if (ok) {
+    if (ok)
+    {
         std::cout << "\nSvi rezultati su konzistentni.\n";
-    } else {
+    }
+    else
+    {
         std::cout << "\nUpozorenje: Rezultati se razlikuju!\n";
     }
 
-    std::cout << "\nUbrzanje u odnosu na classic 2D:\n";
-    double s_1d_base         = t_classic2D / t_1d_base;
-    double s_1d_fast         = t_classic2D / t_1d_fast;
-    double s_simd_stream     = t_classic2D / t_simd_stream;
+    std::cout << "\n====================================================\n";
+    std::cout << "APSOLUTNA VREMENA (sekunde)\n";
+    std::cout << "====================================================\n";
+    std::cout << "Classic 2D:            " << t_classic2D << " s\n";
+    std::cout << "1D baseline:           " << t_1d_base << " s\n";
+    std::cout << "1D fast:               " << t_1d_fast << " s\n";
+    std::cout << "SIMD stream:           " << t_simd_stream << " s\n";
+    std::cout << "SIMD stream + OpenMP:  " << t_simd_stream_omp << " s\n";
+
+    std::cout << "\n====================================================\n";
+    std::cout << "UBRZANJA U ODNOSU NA NATIVNI Classic 2D\n";
+    std::cout << "====================================================\n";
+
+    double s_1d_base = t_classic2D / t_1d_base;
+    double s_1d_fast = t_classic2D / t_1d_fast;
+    double s_simd_stream = t_classic2D / t_simd_stream;
     double s_simd_stream_omp = t_classic2D / t_simd_stream_omp;
 
-    std::cout << "1D baseline:          " << s_1d_base         << "x\n";
-    std::cout << "1D fast:              " << s_1d_fast         << "x\n";
-    std::cout << "SIMD stream:          " << s_simd_stream     << "x\n";
-    std::cout << "SIMD stream + OpenMP: " << s_simd_stream_omp << "x\n";
+    std::cout << "1D baseline:           " << s_1d_base << "x\n";
+    std::cout << "1D fast:               " << s_1d_fast << "x\n";
+    std::cout << "SIMD stream:           " << s_simd_stream << "x\n";
+    std::cout << "SIMD stream + OpenMP:  " << s_simd_stream_omp << "x\n";
 
-    
+    std::cout << "\n====================================================\n";
+    std::cout << "UBRZANJA SIMD-a U ODNOSU NA REALNI BASELINE\n";
+    std::cout << "====================================================\n";
+
+    double s_simd_vs_1d_base = t_1d_base / t_simd_stream;
+    double s_simd_vs_1d_fast = t_1d_fast / t_simd_stream;
+
+    std::cout << "SIMD vs 1D baseline:   " << s_simd_vs_1d_base << "x\n";
+    std::cout << "SIMD vs 1D fast:       " << s_simd_vs_1d_fast << "x\n";
+
+    std::cout << "\n====================================================\n";
+
     //  Zapis u CSV fajl
-    
+
     {
         std::ofstream csv("results.csv");
-        if (!csv) {
+        if (!csv)
+        {
             std::cerr << "Greska: ne mogu otvoriti results.csv za pisanje!\n";
-        } else {
+        }
+        else
+        {
             csv << "Method,TimeSeconds,SpeedupVsClassic,Result\n";
-            csv << "Classic2D,"          << t_classic2D       << "," << 1.0                << "," << r_classic2D       << "\n";
-            csv << "1D_baseline,"        << t_1d_base         << "," << s_1d_base          << "," << r_1d_base         << "\n";
-            csv << "1D_fast,"            << t_1d_fast         << "," << s_1d_fast          << "," << r_1d_fast         << "\n";
-            csv << "SIMD_stream,"        << t_simd_stream     << "," << s_simd_stream      << "," << r_simd_stream     << "\n";
-            csv << "SIMD_stream_OpenMP," << t_simd_stream_omp << "," << s_simd_stream_omp  << "," << r_simd_stream_omp << "\n";
+            csv << "Classic2D," << t_classic2D << "," << 1.0 << "," << r_classic2D << "\n";
+            csv << "1D_baseline," << t_1d_base << "," << s_1d_base << "," << r_1d_base << "\n";
+            csv << "1D_fast," << t_1d_fast << "," << s_1d_fast << "," << r_1d_fast << "\n";
+            csv << "SIMD_stream," << t_simd_stream << "," << s_simd_stream << "," << r_simd_stream << "\n";
+            csv << "SIMD_stream_OpenMP," << t_simd_stream_omp << "," << s_simd_stream_omp << "," << r_simd_stream_omp << "\n";
         }
     }
 
