@@ -1,4 +1,4 @@
-//   g++ -O3 -march=native -mavx2 -mfma -fopenmp -std=c++17 knapsackOptimized.cpp -o knap
+//   g++ -O3 -march=native -mavx2 -mfma -fopenmp -std=c++17 knapsack.cpp -o knap1
 
 #include <iostream>
 #include <vector>
@@ -10,6 +10,7 @@
 #include <immintrin.h>  // AVX2 intrinsics
 #include <omp.h>        // OpenMP
 #include <fstream>      // ofstream za CSV
+#include <new>          // std::align_val_t
 
 //  ContainerLoader klasa
 
@@ -86,17 +87,23 @@ public:
         return dp[capacity];
     }
 
-    // 4) SIMD 1D DP (AVX2, streaming, single-thread)
-    //    – dvostruki bafer (prev, dp), naprijed po w
-    //    – koristi C-nizove (new[]), kontigventna čitanja
+    // 4) SIMD 1D DP (AVX2, streaming, single-thread, PORAVNATO)
+    //
+    //  - koristi C++17 aligned new sa std::align_val_t(32) -> 32B poravnanje adrese
+    //  - scalar prefix dok ne dodjemo do w koji je višekratnik od 8
+    //  - onda AVX2 petlja sa _mm256_load_si256 / _mm256_store_si256 za prev[w], dp[w]
+    //  - "shiftovani" prozor prev[w - wi] i dalje koristi loadu (može biti neporavnat)
     int knapsackSIMD_stream() const {
-        const int N = capacity + 8; // mali padding
+        const int N = capacity + 8; // mali padding da imamo mjesta i za tail
 
-        // C-nizovi umjesto std::vector
-        int* prev = new int[N];
-        int* dp   = new int[N];
+        // 32B-poravnat C-niz (portable, C++17)
+        int* prev = static_cast<int*>(
+            ::operator new[](sizeof(int) * N, std::align_val_t(32))
+        );
+        int* dp   = static_cast<int*>(
+            ::operator new[](sizeof(int) * N, std::align_val_t(32))
+        );
 
-        // inicijalno sve 0
         std::memset(prev, 0, sizeof(int) * N);
         std::memset(dp,   0, sizeof(int) * N);
 
@@ -104,36 +111,50 @@ public:
             const int wi = weights[i];
             const int vi = values[i];
 
-            // jeftin swap pointera umjesto std::swap()
+            // O(1) swap pointera
             int* tmp = prev;
             prev = dp;
             dp   = tmp;
 
-            // ispod wi: predmet ne može stati -> kopiraj staro stanje (linearni memcpy)
+            // ispod wi: predmet ne može stati -> kopiraj staro stanje
             if (wi > 0) {
                 const int count = std::min(wi, capacity + 1);
                 std::memcpy(dp, prev, sizeof(int) * count);
             }
 
+            const int Wlim = capacity - 7;  // posljednji blok [w..w+7] koji staje
+            int w = wi;
+
+            // --- 1) scalar prefix dok &prev[w] / &dp[w] ne postanu 32B-poravnati ---
+            //
+            // prev i dp su poravnati na &prev[0], &dp[0].
+            // 32B = 8 * sizeof(int) => &prev[w] je poravnat kad je w % 8 == 0.
+            //
+            for (; w <= Wlim && (w & 7) != 0; ++w) {
+                int take = prev[w - wi] + vi;
+                int skip = prev[w];
+                dp[w] = (take > skip) ? take : skip;
+            }
+
             __m256i add_vi = _mm256_set1_epi32(vi);
 
-            int w = wi;
-            const int Wlim = capacity - 7; // posljednji blok koji staje u [w..w+7]
-
+            // --- 2) AVX2 petlja sa poravnanim load/store za prev[w], dp[w] ---
             for (; w <= Wlim; w += 8) {
-                // oba loada su kontigventna => cache-friendly
-                __m256i prev_curr  =
-                    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&prev[w]));
+                // &prev[w] i &dp[w] su sada 32B-poravnati (w je višekratnik od 8)
+                __m256i prev_curr =
+                    _mm256_load_si256(reinterpret_cast<const __m256i*>(&prev[w]));
+
+                // prev[w - wi .. w - wi + 7] nije nužno poravnat -> loadu
                 __m256i prev_shift =
                     _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&prev[w - wi]));
 
                 __m256i cand = _mm256_add_epi32(prev_shift, add_vi);
                 __m256i res  = _mm256_max_epi32(prev_curr, cand);
 
-                _mm256_storeu_si256(reinterpret_cast<__m256i*>(&dp[w]), res);
+                _mm256_store_si256(reinterpret_cast<__m256i*>(&dp[w]), res);
             }
 
-            // "rep" (tail) skalarno do kraja capacity-ja
+            // --- 3) scalar tail do kraja capacity-ja ---
             for (; w <= capacity; ++w) {
                 int take = prev[w - wi] + vi;
                 int skip = prev[w];
@@ -143,22 +164,26 @@ public:
 
         int result = dp[capacity];
 
-        delete[] prev;
-        delete[] dp;
+        ::operator delete[](prev, std::align_val_t(32));
+        ::operator delete[](dp,   std::align_val_t(32));
 
         return result;
     }
 
-    // 5) SIMD 1D DP + OpenMP (AVX2 + paralelni for)
+    // 5) SIMD 1D DP + OpenMP (AVX2 + paralelni for, PORAVNATO)
     //
-    //  - ista DP logika kao knapsackSIMD_stream()
-    //  - za fiksni i: prev je read-only, dp se puni po disjunktnim blokovima [w..w+7]
-    //  - for po w je paralelizovan sa OpenMP-om
+    //  - ista DP logika kao iznad
+    //  - za fiksni i: prev je read-only, dp se puni u blokovima [w..w+7]
+    //  - scalar prefix za poravnanje w, pa onda paralelni AVX2 dio
     int knapsackSIMD_stream_omp() const {
         const int N = capacity + 8;
 
-        int* prev = new int[N];
-        int* dp   = new int[N];
+        int* prev = static_cast<int*>(
+            ::operator new[](sizeof(int) * N, std::align_val_t(32))
+        );
+        int* dp   = static_cast<int*>(
+            ::operator new[](sizeof(int) * N, std::align_val_t(32))
+        );
 
         std::memset(prev, 0, sizeof(int) * N);
         std::memset(dp,   0, sizeof(int) * N);
@@ -178,12 +203,20 @@ public:
                 std::memcpy(dp, prev, sizeof(int) * count);
             }
 
+            const int Wlim = capacity - 7;
+            int w = wi;
+
+            // --- 1) scalar prefix dok w ne postane višekratnik od 8 ---
+            for (; w <= Wlim && (w & 7) != 0; ++w) {
+                int take = prev[w - wi] + vi;
+                int skip = prev[w];
+                dp[w] = (take > skip) ? take : skip;
+            }
+
+            const int w_vec_start = w;  // odavde kreće poravnat AVX dio
             __m256i add_vi = _mm256_set1_epi32(vi);
 
-            const int Wlim    = capacity - 7;
-            const int w_start = wi;
-
-            // Paralelizovana AVX2 petlja
+            // --- 2) Paralelizovana AVX2 petlja ---
             #pragma omp parallel
             {
                 int* __restrict loc_prev = prev;
@@ -191,32 +224,32 @@ public:
                 __m256i loc_add_vi       = add_vi;
 
                 #pragma omp for schedule(static)
-                for (int w = w_start; w <= Wlim; w += 8) {
-                    __m256i prev_curr  =
-                        _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&loc_prev[w]));
+                for (int ww = w_vec_start; ww <= Wlim; ww += 8) {
+                    __m256i prev_curr =
+                        _mm256_load_si256(reinterpret_cast<const __m256i*>(&loc_prev[ww]));
                     __m256i prev_shift =
-                        _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&loc_prev[w - wi]));
+                        _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&loc_prev[ww - wi]));
 
                     __m256i cand = _mm256_add_epi32(prev_shift, loc_add_vi);
                     __m256i res  = _mm256_max_epi32(prev_curr, cand);
 
-                    _mm256_storeu_si256(reinterpret_cast<__m256i*>(&loc_dp[w]), res);
+                    _mm256_store_si256(reinterpret_cast<__m256i*>(&loc_dp[ww]), res);
                 }
             }
 
-            // rep (tail) skalarno – OpenMP overhead se ne isplati za malo elemenata
-            int w_tail = std::max(w_start, Wlim + 1);
-            for (int w = w_tail; w <= capacity; ++w) {
-                int take = prev[w - wi] + vi;
-                int skip = prev[w];
-                dp[w] = (take > skip) ? take : skip;
+            // --- 3) scalar tail iza vektorskog dijela ---
+            int w_tail = std::max(w_vec_start, Wlim + 1);
+            for (int ww = w_tail; ww <= capacity; ++ww) {
+                int take = prev[ww - wi] + vi;
+                int skip = prev[ww];
+                dp[ww] = (take > skip) ? take : skip;
             }
         }
 
         int result = dp[capacity];
 
-        delete[] prev;
-        delete[] dp;
+        ::operator delete[](prev, std::align_val_t(32));
+        ::operator delete[](dp,   std::align_val_t(32));
 
         return result;
     }
@@ -255,7 +288,7 @@ double measure_seconds(Func f, int& result_out) {
 
 
 int main() {
-    const int num_items = 1000;
+    const int num_items = 5000;
 
     std::vector<int> weights, values;
     int capacity;
