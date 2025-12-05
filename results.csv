@@ -1,0 +1,5 @@
+Method,TimeSeconds,SpeedupVs1DBaseline,Result,Runs
+Classic2D,2.83039,0.166415,1193217,5
+1D_baseline,0.471017,1,1193217,5
+SIMD_stream,0.0725839,6.48928,1193217,5
+SIMD_stream_OpenMP,0.0609838,7.72365,1193217,5

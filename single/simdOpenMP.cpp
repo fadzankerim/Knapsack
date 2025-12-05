@@ -10,7 +10,9 @@
 #include <cmath>       // std::max
 #include <iomanip>     // std::fixed, std::setprecision
 
-// Funkcija za generiranje testnih podataka
+
+// g++ -o knapsackOmp -O3 -mavx2 -fopenmp simdOpenMP.cpp
+
 void generateTestData(int n,
                       std::vector<int> &weights,
                       std::vector<int> &values,
@@ -18,28 +20,22 @@ void generateTestData(int n,
 {
     weights.resize(n);
     values.resize(n);
-
-    // Inicijalizacija generatora slučajnih brojeva
     std::srand(static_cast<unsigned>(std::time(nullptr)));
-
     for (int i = 0; i < n; ++i)
     {
-        weights[i] = std::rand() % 100 + 1; // Težina: 1..100
-        values[i] = std::rand() % 500 + 50; // Vrijednost: 50..549
+        weights[i] = std::rand() % 100 + 1;
+        values[i] = std::rand() % 500 + 50;
     }
-    // Kapacitet: n * 50
     capacity = n * 50; 
 }
-
-//  ContainerLoader klasa
 
 class ContainerLoader
 {
 private:
-    std::vector<int> weights; // tezine
-    std::vector<int> values;  // vrijednosti
-    int capacity;             // kapacitet
-    int n;                    // br predmeta
+    std::vector<int> weights;
+    std::vector<int> values;
+    int capacity;
+    int n;
 
 public:
     ContainerLoader(const std::vector<int> &w,
@@ -47,9 +43,8 @@ public:
                     int cap)
         : weights(w), values(v), capacity(cap), n((int)w.size()) {}
 
-
     
-    int knapsackSIMD_stream_omp(long long &simd_omp_duration_us) const
+    int knapsackSIMD_stream_omp(long long &simd_omp_duration_us, int numThreads) const
     {
         if (capacity <= 0) return 0;
 
@@ -60,7 +55,6 @@ public:
         std::memset(prev, 0, sizeof(int) * N);
         std::memset(dp, 0, sizeof(int) * N);
 
-        // reset vremena
         simd_omp_duration_us = 0; 
 
         for (int i = 0; i < n; ++i)
@@ -68,12 +62,10 @@ public:
             const int wi = weights[i];
             const int vi = values[i];
 
-            // swap pointera
             int *tmp = prev;
             prev = dp;
             dp = tmp;
 
-            // Kopiranje starog stanja za kapacitete < wi
             if (wi > 0)
             {
                 const int count = std::min(wi, capacity + 1);
@@ -84,13 +76,11 @@ public:
 
             const int Wlim = capacity - 7;
             const int w_start = wi;
-
-
             
-            // mjerenje vremena paralelne regije
             double omp_start_time = omp_get_wtime();
             
-            #pragma omp parallel
+            // koristi onoliko threadova koliko je proslijedjenjo funkcij
+            #pragma omp parallel num_threads(numThreads) 
             {
                 int *__restrict loc_prev = prev;
                 int *__restrict loc_dp = dp;
@@ -109,16 +99,12 @@ public:
 
                     _mm256_storeu_si256(reinterpret_cast<__m256i *>(&loc_dp[w]), res);
                 }
-            } // Kraj omp parallel regije
+            } 
             
             double omp_end_time = omp_get_wtime();
-            
-            
             simd_omp_duration_us += (long long)((omp_end_time - omp_start_time) * 1000000.0);
-            
 
-
-            // Skalarni Tail 
+            // tail skalarno
             int w_tail = std::max(w_start, Wlim + 1);
             for (int w = w_tail; w <= capacity; ++w)
             {
@@ -135,9 +121,7 @@ public:
 
         return result;
     }
-
-}; // Kraj klase ContainerLoader
-
+};
 
 int main(){
     
@@ -147,50 +131,45 @@ int main(){
     std::vector<int> values;
     int capacity;
     
-    
     generateTestData(N_ITEMS, weights, values, capacity);
     
     ContainerLoader loader(weights, values, capacity);
 
+    // Ovdje fiksiramo broj threadova
+    const int FIXED_THREADS = 2;
+
     std::cout << "Broj predmeta (n): " << N_ITEMS << "\n";
     std::cout << "Generirani kapacitet (W): " << capacity << "\n";
-    std::cout << "Broj dostupnih niti (max threads): " << omp_get_max_threads() << "\n";
+    std::cout << "Max hardware threads dostupno: " << omp_get_max_threads() << "\n";
+    std::cout << "Podeseno da koristi fiksnih: " << FIXED_THREADS << " threadova.\n";
     std::cout << "----------------------------------------------------------------\n";
 
+    long long simd_omp_time_us = 0; 
     
-    
-    long long simd_omp_time_us = 0; // Vrijeme provedeno u paraleliziranom SIMD bloku
-    
-    // Mjerenje UKUPNOG VREMENA FUNKCIJE
     auto start_time_total = std::chrono::high_resolution_clock::now();
     
-    // Izvršavanje funkcije i vraćanje kumulativnog SIMD/OpenMP vremena
-    int max_value = loader.knapsackSIMD_stream_omp(simd_omp_time_us);
+    // pozia se funkcija sa brojem thredova
+    int max_value = loader.knapsackSIMD_stream_omp(simd_omp_time_us, FIXED_THREADS);
     
     auto end_time_total = std::chrono::high_resolution_clock::now();
-    // Ukupno vrijeme izvršavanja funkcije u mikrosekundama
     auto total_duration_us = std::chrono::duration_cast<std::chrono::microseconds>(end_time_total - start_time_total).count();
 
-    
-    
     double total_ms = (double)total_duration_us / 1000.0;
     double simd_omp_ms = (double)simd_omp_time_us / 1000.0;
     
-    // Izračun postotka
     double percentage = 0.0;
     if (total_duration_us > 0) {
         percentage = (double)simd_omp_time_us * 100.0 / total_duration_us;
     }
     
-    //rez
     std::cout << "Maksimalna ukupna vrijednost: " << max_value << "\n";
     std::cout << "----------------------------------------------------------------\n";
-    std::cout << "ukupno vrijeme izvršavanja funkcije: " 
+    std::cout << "Ukupno vrijeme: " 
               << std::fixed << std::setprecision(3) 
-              << total_ms << " milisekundi\n";
-    std::cout << "Vrijeme izvršavanja OpenMP + SIMD bloka (kumulativno): " 
-              << simd_omp_ms << " milisekundi\n";
-    std::cout << "\nPROCENTUALNO VRIJEME KRITIČNE SEKCIJE: "
+              << total_ms << " ms\n";
+    std::cout << "Vrijeme OpenMP + SIMD dijela: " 
+              << simd_omp_ms << " ms\n";
+    std::cout << "Udio paralelnog dijela: "
               << std::fixed << std::setprecision(2)
               << percentage << " %\n";
     std::cout << "----------------------------------------------------------------\n";

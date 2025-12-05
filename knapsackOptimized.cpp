@@ -144,7 +144,8 @@ public:
     }
 
     // SIMD 1D DP + OpenMP (AVX2 + paralelni for)
-    int knapsackSIMD_stream_omp() const
+    // *** IZMJENA: Dodan parametar numThreads ***
+    int knapsackSIMD_stream_omp(int numThreads) const
     {
         const int N = capacity + 8;
 
@@ -176,14 +177,15 @@ public:
             const int Wlim = capacity - 7;
             const int w_start = wi;
 
-// Paralelizovana AVX2 petlja
-#pragma omp parallel
+            // Paralelizovana AVX2 petlja
+            // *** IZMJENA: num_threads(numThreads) forsira fiksan broj niti ***
+            #pragma omp parallel num_threads(numThreads)
             {
                 int *__restrict loc_prev = prev;
                 int *__restrict loc_dp = dp;
                 __m256i loc_add_vi = add_vi;
 
-#pragma omp for schedule(static)
+                #pragma omp for schedule(static)
                 for (int w = w_start; w <= Wlim; w += 8)
                 {
                     __m256i prev_curr =
@@ -277,7 +279,10 @@ int main()
 {
     const int num_items = 4000;
     
-    const int NUM_RUNS = 50; 
+    const int NUM_RUNS = 5; 
+    
+    // konstantan broj threadova
+    const int FIXED_THREADS = 2; 
 
     std::vector<int> weights, values;
     int capacity;
@@ -287,8 +292,9 @@ int main()
 
     std::cout << "Poredjenje knapsack metoda (n = " << num_items
               << ", capacity = " << capacity << ")\n";
-    std::cout << "Merenje se ponavlja " << NUM_RUNS << " puta radi prosecnog vremena.\n"; // 
-    std::cout << "OpenMP max threads: " << omp_get_max_threads() << "\n\n";
+    std::cout << "Merenje se ponavlja " << NUM_RUNS << " puta radi prosjecnog vremena.\n"; 
+    std::cout << "OpenMP max threads dostupno: " << omp_get_max_threads() << "\n";
+    std::cout << "Koristim fiksno: " << FIXED_THREADS << " threads za OMP verziju.\n\n";
 
     int r_classic2D = 0, r_1d_base = 0;
     int r_simd_stream = 0, r_simd_stream_omp = 0;
@@ -303,8 +309,10 @@ int main()
                                 { return loader.knapsack1D_baseline(); }, r_1d_base, NUM_RUNS); // REFERENTNA
     t_simd_stream = measure_average_time([&]()
                                     { return loader.knapsackSIMD_stream(); }, r_simd_stream, NUM_RUNS);
+                                    
+    // *** IZMJENA: Proslijedjen FIXED_THREADS ***
     t_simd_stream_omp = measure_average_time([&]()
-                                        { return loader.knapsackSIMD_stream_omp(); }, r_simd_stream_omp, NUM_RUNS);
+                                        { return loader.knapsackSIMD_stream_omp(FIXED_THREADS); }, r_simd_stream_omp, NUM_RUNS);
 
     std::cout << "Rezultati (Prosjek od " << NUM_RUNS << " ponavljanja):\n"; // 
     std::cout << "Classic 2D:            " << r_classic2D << "  (AVG t = " << t_classic2D << " s)\n";

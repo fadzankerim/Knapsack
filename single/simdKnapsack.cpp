@@ -6,11 +6,16 @@
 #include <chrono>
 #include <cstring>     // memcpy, memset
 #include <immintrin.h> // AVX2 intrinsics
-#include <omp.h>       // OpenMP (iako ga ne koristi SIMD_stream, ostavljen je radi kompletnosti)
+#include <omp.h>       // OpenMP 
 #include <cmath>       // std::max
 #include <iomanip>     // std::fixed, std::setprecision
 
-// Funkcija za generiranje testnih podataka
+
+
+// g++ -o knapsackSimd -O3 -mavx2 simdKnapsack.cpp
+
+
+// generisanje testnih podataka
 void generateTestData(int n,
                       std::vector<int> &weights,
                       std::vector<int> &values,
@@ -19,13 +24,13 @@ void generateTestData(int n,
     weights.resize(n);
     values.resize(n);
 
-    // Inicijalizacija generatora slučajnih brojeva
+    // generator slucajnih brojeva
     std::srand(static_cast<unsigned>(std::time(nullptr)));
 
     for (int i = 0; i < n; ++i)
     {
-        weights[i] = std::rand() % 100 + 1; // Težina: 1..100
-        values[i] = std::rand() % 500 + 50; // Vrijednost: 50..549
+        weights[i] = std::rand() % 100 + 1; // Težina: 1 do 100
+        values[i] = std::rand() % 500 + 50; // Vrijednost: 50 do 549
     }
     // Kapacitet: n * 50
     capacity = n * 50; 
